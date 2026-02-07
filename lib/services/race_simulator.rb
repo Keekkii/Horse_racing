@@ -28,7 +28,8 @@ class RaceSimulator
         finished: false,
         segment_splits: [],
         finish_time: nil,
-        injured: false
+        injured: false,
+        exhausted: false
       }
     end
   end
@@ -48,32 +49,66 @@ class RaceSimulator
       segment_index = (state[:position] / GameConfig::SEGMENT_LENGTH).floor
       segment = @terrain[segment_index] || @terrain.last # Fallback if past end
       
-      # 2. Calculate Effective Speed
+      # 2. Calculate Target Speed
       # Base speed * Terrain Modifier
-      speed = horse.effective_speed * segment[:modifiers][:speed]
+      target_speed = horse.effective_speed * segment[:modifiers][:speed]
       
       # 3. Stamina Management
-      if state[:stamina] > 0
-        speed *= GameConfig::BOOST_SPEED_MULTIPLIER
-        # Drain: base * terrain_drain
+      max_stamina = horse.effective_stamina
+      
+      # Can only use stamina if not exhausted
+      if state[:stamina] > 0 && !state[:exhausted]
+        target_speed *= GameConfig::BOOST_SPEED_MULTIPLIER
+        # Drain: base * terrain_drain * speed_factor (faster = more drain)
         drain = GameConfig::STAMINA_DRAIN_BASE * segment[:modifiers][:stamina_drain] * @time_step
         state[:stamina] -= drain
+        
+        # If drained, become exhausted
+        if state[:stamina] <= 0
+          state[:stamina] = 0.0
+          state[:exhausted] = true
+        end
       else
-        speed *= GameConfig::DEPLETED_SPEED_MULTIPLIER
-        # Stamina Recovery (slow) if pacing allows - skipped for simple race logic, 
-        # assume they push hard always in this simple sim unless we add "pacing strategies"
+        # Recovering or Empty
+        target_speed *= GameConfig::DEPLETED_SPEED_MULTIPLIER # Reduced speed while recovering
+        
+        # Stamina Recovery (slow) if pacing allows
+        recovery = GameConfig::RECOVERY_RATE * @time_step
+        state[:stamina] += recovery
+        
+        # Cap at max stamina
+        if state[:stamina] >= max_stamina
+          state[:stamina] = max_stamina
+          state[:exhausted] = false # Fully recovered, can boost again
+        end
+      end
+
+      # Apply Acceleration to reach Target Speed
+      # Accelerate
+      if state[:current_speed] < target_speed
+        state[:current_speed] += horse.acceleration * @time_step
+        state[:current_speed] = target_speed if state[:current_speed] > target_speed
+      # Decelerate (fatigue or terrain change) - instant for now or use gravity?
+      # Let's use acceleration for braking too effectively
+      elsif state[:current_speed] > target_speed
+        state[:current_speed] -= horse.acceleration * @time_step
+        state[:current_speed] = target_speed if state[:current_speed] < target_speed
       end
 
       # 4. Move
-      distance_moved = speed * @time_step
+      distance_moved = state[:current_speed] * @time_step
       state[:position] += distance_moved
-      state[:current_speed] = speed
+      # state[:current_speed] is already updated
 
       # 5. Check Injury
-      if !state[:injured] && rand < (segment[:modifiers][:injury_chance] * 0.01 * @time_step) 
+      # Use segment modifier directly (e.g. 0.01) * time_step. 
+      # Removing the extra 0.01 multiplier which made it 0.0001
+      injury_threshold = segment[:modifiers][:injury_chance] * @time_step
+      
+      if !state[:injured] && rand < injury_threshold
         # Very small chance per step
         state[:injured] = true
-        # Apply immediate penalty?
+        # Apply immediate penalty
         state[:current_speed] *= 0.5
         # Injure model later
       end

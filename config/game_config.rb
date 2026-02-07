@@ -13,10 +13,10 @@ module GameConfig
   # Terrain Modifiers
   TERRAIN_TYPES = [:grass, :mud, :sand, :gravel]
   TERRAIN_MODIFIERS = {
-    grass: { speed: 1.0, stamina_drain: 1.0, injury_chance: 0.01 },
-    mud:   { speed: 0.8, stamina_drain: 1.5, injury_chance: 0.03 },
-    sand:  { speed: 0.9, stamina_drain: 1.3, injury_chance: 0.02 },
-    gravel:{ speed: 0.95, stamina_drain: 1.1, injury_chance: 0.02 }
+    grass: { speed: 1.0, stamina_drain: 1.0, injury_chance: 0.002 },
+    mud:   { speed: 0.8, stamina_drain: 1.5, injury_chance: 0.005 },
+    sand:  { speed: 0.9, stamina_drain: 1.3, injury_chance: 0.004 },
+    gravel:{ speed: 0.95, stamina_drain: 1.1, injury_chance: 0.003 }
   }
 
   # Age Curve
