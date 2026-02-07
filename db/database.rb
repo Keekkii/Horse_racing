@@ -4,12 +4,14 @@ require 'json'
 class Database
   DB_FILE = 'db/racing.sqlite'
 
+  # Vraća ili kreira vezu s bazom podataka
   def self.connection
     @db ||= SQLite3::Database.new(DB_FILE)
-    @db.results_as_hash = true
+    @db.results_as_hash = true # Rezultati upita se vraćaju kao Hash
     @db
   end
 
+  # Postavljanje baze: provjera sheme i punjenje početnim podacima ako je prazna
   def self.setup
     puts "Checking database schema..."
     create_tables
@@ -17,6 +19,7 @@ class Database
     seed_data if count == 0
   end
 
+  # Kreiranje tablica potrebnih za igru
   def self.create_tables
     connection.execute_batch <<-SQL
       CREATE TABLE IF NOT EXISTS horses (
@@ -67,9 +70,9 @@ class Database
         amount REAL,
         odds REAL,
         payout REAL,
-        horse_id INTEGER, -- For Win/Place bets
-        horse2_id INTEGER, -- For Exacta (1st/2nd)
-        selection TEXT, -- JSON for flexible future bets
+        horse_id INTEGER, -- Za Win/Place oklade
+        horse2_id INTEGER, -- Za Exacta (1. i 2. mjesto)
+        selection TEXT, -- JSON za fleksibilne buduće oklade
         FOREIGN KEY(race_id) REFERENCES races(id)
       );
     SQL
@@ -77,7 +80,7 @@ class Database
     migrate_bets_table!
   end
 
-  # Lightweight migrations for existing DBs (SQLite can't add IF NOT EXISTS on columns)
+  # Lagane migracije za postojeće baze (SQLite nema jednostavan ALTER TABLE IF NOT EXISTS)
   def self.migrate_bets_table!
     cols = connection.execute("PRAGMA table_info(bets)").map { |r| r['name'] }
     unless cols.include?('horse2_id')
@@ -88,6 +91,7 @@ class Database
     end
   end
 
+  # Punjenje baze početnim konjima
   def self.seed_data
     puts "Seeding initial horses..."
     horses = [

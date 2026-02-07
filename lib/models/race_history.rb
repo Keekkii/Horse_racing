@@ -12,15 +12,16 @@ class RaceHistory
     @race_type = attributes['race_type']
   end
 
-# ... sve isto kao prije ...
-
+  # Kreira zapis o utrci i rezultate za svakog konja u bazi podataka
   def self.create(winner_id, terrain_seed, race_type, participating_horses_results)
+    # Spremi glavne podatke o utrci
     Database.connection.execute(
       "INSERT INTO races (date, terrain_seed, winner_id, race_type) VALUES (CURRENT_TIMESTAMP, ?, ?, ?)",
       [terrain_seed, winner_id, race_type]
     )
     race_id = Database.connection.last_insert_row_id
 
+    # Spremi rezultate za svakog pojedinog konja (pozicija, vrijeme, prolazna vremena)
     participating_horses_results.each do |result|
       Database.connection.execute(
         "INSERT INTO race_results (race_id, horse_id, position, finish_time, segment_times) VALUES (?, ?, ?, ?, ?)",
@@ -31,4 +32,3 @@ class RaceHistory
     race_id
   end
 end
-

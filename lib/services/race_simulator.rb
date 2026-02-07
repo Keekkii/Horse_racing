@@ -12,7 +12,7 @@ class RaceSimulator
     @race_type = race_type
     @start_stamina = start_stamina
     @terrain = TerrainGenerator.generate_terrain(@seed)
-    @time_step = 0.5 # seconds
+    @time_step = 0.5 # sekunde po koraku simulacije
     @current_time = 0.0
     @horse_states = {}
     @results = []
@@ -22,30 +22,32 @@ class RaceSimulator
     initialize_states
   end
 
-def initialize_states
-  @horses.each do |horse|
-    stats = horse.effective_stats
+  # Postavljanje početnog stanja za svakog konja
+  def initialize_states
+    @horses.each do |horse|
+      stats = horse.effective_stats
 
-    base_stamina = stats[:stamina]
-    start_override = @start_stamina && @start_stamina[horse.id]
-    start_stamina = start_override ? [start_override, base_stamina].min : base_stamina
+      base_stamina = stats[:stamina]
+      # Ako je definiran start_stamina (npr. u prvenstvu), koristimo manju vrijednost
+      start_override = @start_stamina && @start_stamina[horse.id]
+      start_stamina = start_override ? [start_override, base_stamina].min : base_stamina
 
-    @horse_states[horse.id] = {
-      position: 0.0,
-      stamina: start_stamina,
-      current_speed: 0.0,
-      finished: false,
-      segment_splits: [],
-      next_segment_boundary: GameConfig::SEGMENT_LENGTH.to_f,
-      segment_start_time: 0.0,
-      finish_time: nil,
-      injured: false,
-      exhausted: false
-    }
+      @horse_states[horse.id] = {
+        position: 0.0,
+        stamina: start_stamina,
+        current_speed: 0.0,
+        finished: false,
+        segment_splits: [],
+        next_segment_boundary: GameConfig::SEGMENT_LENGTH.to_f,
+        segment_start_time: 0.0,
+        finish_time: nil,
+        injured: false,
+        exhausted: false
+      }
+    end
   end
-end
 
-
+  # Glavni korak simulacije (poziva se u petlji)
   def step
     return if @finished
 
@@ -56,28 +58,32 @@ end
       next if state[:finished]
       active_horses += 1
 
+      # Određivanje trenutnog segmenta terena
       segment_index = (state[:position] / GameConfig::SEGMENT_LENGTH).floor
       segment = @terrain[segment_index] || @terrain.last
 
-      # dynamic stats (age+injury+form)
+      # Dinamičke statistike (dob + ozljede + forma)
       stats = horse.effective_stats
       max_stamina = stats[:stamina]
 
       target_speed = stats[:speed] * segment[:modifiers][:speed]
 
-      # Stamina
+      # Logika Stamine
       if state[:stamina] > 0 && !state[:exhausted]
+        # Ako ima stamine, konj može "boostati" (brže od osnovne brzine)
         target_speed *= GameConfig::BOOST_SPEED_MULTIPLIER
 
+        # Potrošnja stamine ovisi o brzini i terenu
         speed_factor = [[state[:current_speed] / [stats[:speed], 0.0001].max, 0.5].max, 1.5].min
         drain = GameConfig::STAMINA_DRAIN_BASE * segment[:modifiers][:stamina_drain] * speed_factor * @time_step
         state[:stamina] -= drain
 
         if state[:stamina] <= 0
           state[:stamina] = 0.0
-          state[:exhausted] = true
+          state[:exhausted] = true # Konj se umorio
         end
       else
+        # Ako je iscrpljen, kreće se sporije i oporavlja staminu
         target_speed *= GameConfig::DEPLETED_SPEED_MULTIPLIER
 
         recovery = GameConfig::RECOVERY_RATE * @time_step
@@ -85,11 +91,11 @@ end
 
         if state[:stamina] >= max_stamina
           state[:stamina] = max_stamina
-          state[:exhausted] = false
+          state[:exhausted] = false # Oporavljen
         end
       end
 
-      # Acceleration
+      # Akceleracija (postepeno ubrzavanje/usporavanje prema ciljanoj brzini)
       if state[:current_speed] < target_speed
         state[:current_speed] += stats[:acceleration] * @time_step
         state[:current_speed] = target_speed if state[:current_speed] > target_speed
@@ -98,10 +104,10 @@ end
         state[:current_speed] = target_speed if state[:current_speed] < target_speed
       end
 
-      # Move
+      # Pomicanje
       state[:position] += state[:current_speed] * @time_step
 
-      # Segment splits
+      # Bilježenje prolaznih vremena (splits)
       while state[:position] >= state[:next_segment_boundary] && state[:next_segment_boundary] < GameConfig::TRACK_LENGTH
         split_time = @current_time - state[:segment_start_time]
         state[:segment_splits] << split_time.round(3)
@@ -109,7 +115,7 @@ end
         state[:next_segment_boundary] += GameConfig::SEGMENT_LENGTH
       end
 
-      # Injury risk: terrain + stamina + age + race_type
+      # Rizik od ozljede: teren + stamina + dob + tip utrke
       stamina_ratio = max_stamina <= 0 ? 0.0 : (state[:stamina] / max_stamina)
       low_th = GameConfig::INJURY_STAMINA_LOW_THRESHOLD
       stamina_mult = 1.0
@@ -130,10 +136,10 @@ end
 
       if !state[:injured] && rand < injury_threshold
         state[:injured] = true
-        state[:current_speed] *= 0.5
+        state[:current_speed] *= 0.5 # Ozljeda drastično usporava konja
       end
 
-      # Finish
+      # Provjera cilja
       if state[:position] >= GameConfig::TRACK_LENGTH
         state[:finished] = true
         state[:finish_time] = @current_time
@@ -153,12 +159,14 @@ end
 
     @current_time += @time_step
 
+    # Ako su svi završili, spremi rezultate
     if active_horses == 0
       @finished = true
       record_race
     end
   end
 
+  # Spremanje rezultata utrke u bazu i ažuriranje statusa konja
   def record_race
     @results.sort_by! { |r| r[:time] }
 
@@ -174,6 +182,7 @@ end
 
     @race_id = RaceHistory.create(winner_id, @seed, @race_type, result_data)
 
+    # Ažuriranje statistika konja (pobjede, utrke, ozljede, starenje)
     @results.each do |r|
       horse = r[:horse]
       horse.races_run += 1
@@ -187,8 +196,8 @@ end
 
       horse.check_aging!
       if horse.should_retire?
-      horse.retire!
-      Horse.create_rookie!
+        horse.retire!
+        Horse.create_rookie! # Zamijeni umirovljenog konja novim
       end
 
       horse.save

@@ -2,7 +2,7 @@ require_relative '../lib/services/race_simulator'
 require_relative '../lib/models/horse'
 require_relative '../db/database'
 
-# Silence DB output
+# Utišavamo ispis baze podataka
 class Database
   def self.setup; end
 end
@@ -15,11 +15,12 @@ total_horses_run = 0
 
 horses = Horse.all
 
+# Simulacija 100 utrka za provjeru balansa igre
 100.times do |i|
-  # Reset horse stats for the simulation (don't save to DB)
+  # Resetiramo statistike konja za simulaciju (ne spremamo u bazu)
   sim_horses = horses.map do |h|
     h_clone = h.dup
-    h_clone.id = h.id # Keep ID
+    h_clone.id = h.id # Zadržavamo ID
     h_clone
   end
   
@@ -32,6 +33,7 @@ horses = Horse.all
   winner = sim.results.first[:horse]
   wins[winner.name] += 1
   
+  # Ispis detalja samo za prvu utrku (Debug)
   if i == 0
     puts "Debug Race 1:"
     sim.results.each do |res|
@@ -40,6 +42,7 @@ horses = Horse.all
     end
   end
   
+  # Brojanje ozljeda
   sim.results.each do |res|
     if res[:injured]
       injuries += 1

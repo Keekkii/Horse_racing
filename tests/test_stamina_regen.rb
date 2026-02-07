@@ -1,7 +1,7 @@
 require_relative '../lib/services/race_simulator'
 require_relative '../lib/models/horse'
 
-# Mock Database connection to avoid dependency on actual DB during this specific test
+# Mock Database connection (Izbjegavanje ovisnosti o pravoj bazi tijekom testa)
 class Database
   def self.connection
     @connection ||= Object.new
@@ -9,7 +9,7 @@ class Database
   def self.setup; end
 end
 
-# Mock Horse to avoid DB calls
+# Mock Horse (Lažni konj)
 class MockHorse < Horse
   def initialize
     @id = 1
@@ -37,16 +37,16 @@ puts "Testing Stamina Regeneration..."
 horse = MockHorse.new
 simulator = RaceSimulator.new([horse], 12345)
 
-# Force stamina to 0
+# Prisilno postavljanje stamine na 0
 state = simulator.get_state(horse.id)
 state[:stamina] = 0.0
 
 puts "Initial Stamina: #{state[:stamina]}"
 
-# Run one step
+# Izvrši jedan korak simulacije
 simulator.step
 
-# Check if stamina increased
+# Provjera je li se stamina povećala (regeneracija)
 new_stamina = state[:stamina]
 puts "Stamina after 1 step (recovery): #{new_stamina}"
 
@@ -57,21 +57,20 @@ else
   exit 1
 end
 
-# Check cap
-# To test the cap in the regeneration block, we need stamina <= 0 BUT resulting stamina > max_stamina
-# So we need a horse with very low max stamina for this specific check, or assume recovery is large.
-# Since recovery is 0.25 (0.5 * 0.5), we can set a temporary override on the horse.
+# Provjera limita (Cap)
+# Testiramo da se stamina ne regenerira iznad maksimuma.
+# Postavljamo konja s jako malom maksimalnom staminom za ovaj test.
 
 def horse.effective_stamina
   0.1
 end
 
-state[:stamina] = -0.1 # Ensure we enter the <= 0 block
+state[:stamina] = -0.1 # Osiguravamo da ulazimo u blok za regeneraciju
 simulator.step
 capped_stamina = state[:stamina]
 puts "Stamina after cap check (Max=0.1): #{capped_stamina}"
 
-if capped_stamina <= 0.10001 # Float tolerance
+if capped_stamina <= 0.10001 # Tolerancija za float brojeve
   puts "SUCCESS: Stamina capped at max."
 else
   puts "FAILURE: Stamina exceeded max: #{capped_stamina}"
