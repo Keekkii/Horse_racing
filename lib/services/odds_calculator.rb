@@ -2,31 +2,52 @@ require_relative '../models/horse'
 require_relative '../../config/game_config'
 
 class OddsCalculator
-  def self.calculate(horses)
-    total_rating = 0.0
+  # Returns:
+  # {
+  #   odds: { horse_id => decimal_odds },
+  #   probabilities: { horse_id => fair_probability },
+  #   implied_probabilities: { horse_id => probability_with_overround },
+  # }
+  #
+  # - Form comes from DB via Horse#form_multiplier (no randomness).
+  # - House edge is implemented as OVERROUND: sum(implied) = 1 + HOUSE_EDGE
+  def self.calculate(horses, terrain_segments: nil)
     scores = {}
 
-    horses.each do |horse|
-      # Simplified rating formula: speed * stamina * form * age_factor
-      rating = horse.effective_speed * (horse.effective_stamina * 0.1)
-      rating += rand(0.5..1.0) # Small random variance for "form" or unpredictability
-      scores[horse.id] = rating
-      total_rating += rating
+    terrain_speed = 1.0
+    terrain_drain = 1.0
+    if terrain_segments && !terrain_segments.empty?
+      terrain_speed = terrain_segments.map { |s| s[:modifiers][:speed].to_f }.sum / terrain_segments.length
+      terrain_drain = terrain_segments.map { |s| s[:modifiers][:stamina_drain].to_f }.sum / terrain_segments.length
     end
 
-    odds = {}
     horses.each do |horse|
-      probability = scores[horse.id] / total_rating
-      # Apply House Edge
-      probability_with_vig = probability * (1.0 - GameConfig::HOUSE_EDGE)
-      
-      # Convert to Decimal Odds (European style)
-      if probability_with_vig <= 0
-        odds[horse.id] = 999.0 
-      else
-        odds[horse.id] = (1.0 / probability_with_vig).round(2)
-      end
+      stats = horse.effective_stats
+
+      speed_component = stats[:speed]
+      stamina_component = stats[:stamina] * 0.10
+
+      stamina_bias = [[(terrain_drain - 1.0) * 0.5, 0.0].max, 0.5].min
+      rating = speed_component * (1.0 - stamina_bias) + stamina_component * (1.0 + stamina_bias)
+
+      rating *= terrain_speed
+      rating = 0.0001 if rating <= 0
+      scores[horse.id] = rating
     end
-    odds
+
+    total = scores.values.sum
+    fair = {}
+    scores.each { |hid, score| fair[hid] = score / total }
+
+    overround = 1.0 + GameConfig::HOUSE_EDGE
+    implied = {}
+    fair.each { |hid, p| implied[hid] = p * overround }
+
+    odds = {}
+    implied.each do |hid, p|
+      odds[hid] = p <= 0 ? 999.0 : (1.0 / p).round(2)
+    end
+
+    { odds: odds, probabilities: fair, implied_probabilities: implied }
   end
 end

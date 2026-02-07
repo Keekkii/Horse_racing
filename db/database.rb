@@ -13,7 +13,6 @@ class Database
   def self.setup
     puts "Checking database schema..."
     create_tables
-    # Seed data if horses table is empty
     count = connection.get_first_value("SELECT count(*) FROM horses")
     seed_data if count == 0
   end
@@ -69,25 +68,38 @@ class Database
         odds REAL,
         payout REAL,
         horse_id INTEGER, -- For Win/Place bets
+        horse2_id INTEGER, -- For Exacta (1st/2nd)
+        selection TEXT, -- JSON for flexible future bets
         FOREIGN KEY(race_id) REFERENCES races(id)
       );
     SQL
+
+    migrate_bets_table!
+  end
+
+  # Lightweight migrations for existing DBs (SQLite can't add IF NOT EXISTS on columns)
+  def self.migrate_bets_table!
+    cols = connection.execute("PRAGMA table_info(bets)").map { |r| r['name'] }
+    unless cols.include?('horse2_id')
+      connection.execute("ALTER TABLE bets ADD COLUMN horse2_id INTEGER")
+    end
+    unless cols.include?('selection')
+      connection.execute("ALTER TABLE bets ADD COLUMN selection TEXT")
+    end
   end
 
   def self.seed_data
     puts "Seeding initial horses..."
     horses = [
-      ["Thunder", "T", 8.0, 7.0, 6.0, 3],
+      ["Thunder",   "T", 8.0, 7.0, 6.0, 3],
       ["Lightning", "L", 9.0, 5.0, 8.0, 3],
-      ["Storm", "S", 7.5, 8.0, 5.5, 4],
-      ["Bolt", "B", 8.5, 6.0, 9.0, 2],
-      ["Flash", "F", 9.5, 4.0, 9.5, 3] # Fast but low stamina
+      ["Storm",     "S", 7.5, 8.0, 5.5, 4],
+      ["Bolt",      "B", 8.5, 6.0, 9.0, 2],
+      ["Flash",     "F", 9.5, 4.0, 9.5, 3]
     ]
 
     stmt = connection.prepare("INSERT INTO horses (name, symbol, base_speed, stamina_rating, acceleration, age) VALUES (?, ?, ?, ?, ?, ?)")
-    horses.each do |h|
-      stmt.execute(h)
-    end
+    horses.each { |h| stmt.execute(h) }
     stmt.close
   end
 end

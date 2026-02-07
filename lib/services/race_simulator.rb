@@ -4,122 +4,144 @@ require_relative '../models/horse'
 require_relative 'terrain_generator'
 
 class RaceSimulator
-  attr_reader :results, :finished, :time_step
+  attr_reader :results, :finished, :time_step, :race_id, :seed, :terrain
 
-  def initialize(horses, seed = nil)
+  def initialize(horses, seed = nil, race_type: "Standard", start_stamina: {})
     @horses = horses
     @seed = seed || Random.new_seed
+    @race_type = race_type
+    @start_stamina = start_stamina
     @terrain = TerrainGenerator.generate_terrain(@seed)
     @time_step = 0.5 # seconds
     @current_time = 0.0
-    @horse_states = {} # Tracks dynamic state (position, stamina, etc.)
+    @horse_states = {}
     @results = []
     @finished = false
+    @race_id = nil
 
     initialize_states
   end
 
-  def initialize_states
-    @horses.each do |horse|
-      @horse_states[horse.id] = {
-        position: 0.0,
-        stamina: horse.effective_stamina,
-        current_speed: 0.0,
-        finished: false,
-        segment_splits: [],
-        finish_time: nil,
-        injured: false,
-        exhausted: false
-      }
-    end
+def initialize_states
+  @horses.each do |horse|
+    stats = horse.effective_stats
+
+    base_stamina = stats[:stamina]
+    start_override = @start_stamina && @start_stamina[horse.id]
+    start_stamina = start_override ? [start_override, base_stamina].min : base_stamina
+
+    @horse_states[horse.id] = {
+      position: 0.0,
+      stamina: start_stamina,
+      current_speed: 0.0,
+      finished: false,
+      segment_splits: [],
+      next_segment_boundary: GameConfig::SEGMENT_LENGTH.to_f,
+      segment_start_time: 0.0,
+      finish_time: nil,
+      injured: false,
+      exhausted: false
+    }
   end
+end
+
 
   def step
     return if @finished
-    
+
     active_horses = 0
 
     @horses.each do |horse|
       state = @horse_states[horse.id]
       next if state[:finished]
-
       active_horses += 1
-      
-      # 1. Determine current terrain segment
+
       segment_index = (state[:position] / GameConfig::SEGMENT_LENGTH).floor
-      segment = @terrain[segment_index] || @terrain.last # Fallback if past end
-      
-      # 2. Calculate Target Speed
-      # Base speed * Terrain Modifier
-      target_speed = horse.effective_speed * segment[:modifiers][:speed]
-      
-      # 3. Stamina Management
-      max_stamina = horse.effective_stamina
-      
-      # Can only use stamina if not exhausted
+      segment = @terrain[segment_index] || @terrain.last
+
+      # dynamic stats (age+injury+form)
+      stats = horse.effective_stats
+      max_stamina = stats[:stamina]
+
+      target_speed = stats[:speed] * segment[:modifiers][:speed]
+
+      # Stamina
       if state[:stamina] > 0 && !state[:exhausted]
         target_speed *= GameConfig::BOOST_SPEED_MULTIPLIER
-        # Drain: base * terrain_drain * speed_factor (faster = more drain)
-        drain = GameConfig::STAMINA_DRAIN_BASE * segment[:modifiers][:stamina_drain] * @time_step
+
+        speed_factor = [[state[:current_speed] / [stats[:speed], 0.0001].max, 0.5].max, 1.5].min
+        drain = GameConfig::STAMINA_DRAIN_BASE * segment[:modifiers][:stamina_drain] * speed_factor * @time_step
         state[:stamina] -= drain
-        
-        # If drained, become exhausted
+
         if state[:stamina] <= 0
           state[:stamina] = 0.0
           state[:exhausted] = true
         end
       else
-        # Recovering or Empty
-        target_speed *= GameConfig::DEPLETED_SPEED_MULTIPLIER # Reduced speed while recovering
-        
-        # Stamina Recovery (slow) if pacing allows
+        target_speed *= GameConfig::DEPLETED_SPEED_MULTIPLIER
+
         recovery = GameConfig::RECOVERY_RATE * @time_step
         state[:stamina] += recovery
-        
-        # Cap at max stamina
+
         if state[:stamina] >= max_stamina
           state[:stamina] = max_stamina
-          state[:exhausted] = false # Fully recovered, can boost again
+          state[:exhausted] = false
         end
       end
 
-      # Apply Acceleration to reach Target Speed
-      # Accelerate
+      # Acceleration
       if state[:current_speed] < target_speed
-        state[:current_speed] += horse.acceleration * @time_step
+        state[:current_speed] += stats[:acceleration] * @time_step
         state[:current_speed] = target_speed if state[:current_speed] > target_speed
-      # Decelerate (fatigue or terrain change) - instant for now or use gravity?
-      # Let's use acceleration for braking too effectively
       elsif state[:current_speed] > target_speed
-        state[:current_speed] -= horse.acceleration * @time_step
+        state[:current_speed] -= stats[:acceleration] * @time_step
         state[:current_speed] = target_speed if state[:current_speed] < target_speed
       end
 
-      # 4. Move
-      distance_moved = state[:current_speed] * @time_step
-      state[:position] += distance_moved
-      # state[:current_speed] is already updated
+      # Move
+      state[:position] += state[:current_speed] * @time_step
 
-      # 5. Check Injury
-      # Use segment modifier directly (e.g. 0.01) * time_step. 
-      # Removing the extra 0.01 multiplier which made it 0.0001
-      injury_threshold = segment[:modifiers][:injury_chance] * @time_step
-      
-      if !state[:injured] && rand < injury_threshold
-        # Very small chance per step
-        state[:injured] = true
-        # Apply immediate penalty
-        state[:current_speed] *= 0.5
-        # Injure model later
+      # Segment splits
+      while state[:position] >= state[:next_segment_boundary] && state[:next_segment_boundary] < GameConfig::TRACK_LENGTH
+        split_time = @current_time - state[:segment_start_time]
+        state[:segment_splits] << split_time.round(3)
+        state[:segment_start_time] = @current_time
+        state[:next_segment_boundary] += GameConfig::SEGMENT_LENGTH
       end
 
-      # 6. Check Finish
+      # Injury risk: terrain + stamina + age + race_type
+      stamina_ratio = max_stamina <= 0 ? 0.0 : (state[:stamina] / max_stamina)
+      low_th = GameConfig::INJURY_STAMINA_LOW_THRESHOLD
+      stamina_mult = 1.0
+      if stamina_ratio < low_th
+        scale = (low_th - stamina_ratio) / low_th
+        stamina_mult = 1.0 + scale * (GameConfig::INJURY_STAMINA_RISK_MAX - 1.0)
+      end
+
+      if horse.age >= GameConfig::PEAK_AGE
+        age_mult = 1.0 + (horse.age - GameConfig::PEAK_AGE) * GameConfig::INJURY_AGE_RISK_PER_YEAR_OVER_PEAK
+      else
+        age_mult = 1.0 + (GameConfig::PEAK_AGE - horse.age) * GameConfig::INJURY_AGE_RISK_PER_YEAR_UNDER_PEAK
+      end
+
+      type_mult = GameConfig::RACE_TYPE_INJURY_MULTIPLIERS[@race_type] || 1.0
+
+      injury_threshold = segment[:modifiers][:injury_chance] * stamina_mult * age_mult * type_mult * @time_step
+
+      if !state[:injured] && rand < injury_threshold
+        state[:injured] = true
+        state[:current_speed] *= 0.5
+      end
+
+      # Finish
       if state[:position] >= GameConfig::TRACK_LENGTH
         state[:finished] = true
         state[:finish_time] = @current_time
-        state[:position] = GameConfig::TRACK_LENGTH # Clamp
-        
-        # Record result
+        state[:position] = GameConfig::TRACK_LENGTH
+
+        last_split = @current_time - state[:segment_start_time]
+        state[:segment_splits] << last_split.round(3)
+
         @results << {
           horse: horse,
           time: @current_time,
@@ -130,7 +152,7 @@ class RaceSimulator
     end
 
     @current_time += @time_step
-    
+
     if active_horses == 0
       @finished = true
       record_race
@@ -138,47 +160,41 @@ class RaceSimulator
   end
 
   def record_race
-    # Sort results by time
     @results.sort_by! { |r| r[:time] }
-    
-    # Save History
+
     winner_id = @results.first[:horse].id
     result_data = @results.map.with_index do |r, idx|
-       {
-         horse_id: r[:horse].id,
-         position: idx + 1,
-         finish_time: r[:time],
-         splits: r[:splits]
-       }
+      {
+        horse_id: r[:horse].id,
+        position: idx + 1,
+        finish_time: r[:time],
+        splits: r[:splits]
+      }
     end
-    
-    RaceHistory.create(winner_id, @seed, "Standard", result_data)
 
-    # Process Injuries & Stats
+    @race_id = RaceHistory.create(winner_id, @seed, @race_type, result_data)
+
     @results.each do |r|
-       horse = r[:horse]
-       # Update generic stats (races run)
-       horse.races_run += 1
-       if r[:horse].id == winner_id
-         horse.wins += 1
-       end
-       
-       # Apply injury if happened
-       if r[:injured]
-         # severity 1-3
-         severity = rand(1..3)
-         duration = rand(2..5)
-         horse.injure!("Strain", severity, duration)
-       else
-         # Recover existing
-         horse.recover_one_race
-       end
-       
-       horse.save # Presumes save updates runs/wins
+      horse = r[:horse]
+      horse.races_run += 1
+      horse.wins += 1 if horse.id == winner_id
+
+      if r[:injured]
+        severity = rand(GameConfig::INJURY_SEVERITY_RANGE)
+        duration = rand(GameConfig::INJURY_DURATION_RANGE)
+        horse.injure!("Strain", severity, duration)
+      end
+
+      horse.check_aging!
+      if horse.should_retire?
+      horse.retire!
+      Horse.create_rookie!
+      end
+
+      horse.save
     end
   end
-  
-  # For UI animation
+
   def get_state(horse_id)
     @horse_states[horse_id]
   end
