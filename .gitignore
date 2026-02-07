@@ -1,0 +1,9 @@
+# Common Ruby exclusions
+Gemfile.lock
+.bundle/
+vendor/bundle/
+log/
+tmp/
+.DS_Store
+.idea/
+.vscode/
